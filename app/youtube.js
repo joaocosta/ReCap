@@ -48,6 +48,7 @@ export async function inspectYouTube(input, onSpawn) {
     title: m.title || 'Untitled video', duration: Number(m.duration) || 0,
     durationText: formatTime(m.duration), thumbnailUrl: m.thumbnail || '', uploader: m.uploader || m.channel || '',
     uploadDate: m.upload_date || '', originalLanguage: m.language || '', captions,
+    commentCount: m.comment_count != null && Number.isFinite(Number(m.comment_count)) ? Number(m.comment_count) : null,
     defaultCaptionId: captions[0].id
   };
 }
@@ -94,6 +95,18 @@ export async function downloadCaption(jobDir, url, choice, onSpawn) {
   await fs.writeFile(path.join(jobDir, 'transcript-timestamped.txt'), cleaned.timestamped);
   await fs.writeFile(path.join(jobDir, 'transcript-clean.txt'), cleaned.clean);
   return cleaned;
+}
+
+export async function downloadComments(url, onSpawn) {
+  const result = await attempt([
+    '--dump-single-json', '--skip-download', '--no-playlist', '--no-warnings', '--write-comments',
+    '--extractor-args', 'youtube:max_comments=10000,10000,10000,10000;comment_sort=top', url
+  ], 10 * 60_000, onSpawn);
+  let info;
+  try { info = JSON.parse(result.stdout); } catch { throw new Error('YouTube returned unreadable comment data.'); }
+  const reportedCount = info.comment_count != null && Number.isFinite(Number(info.comment_count)) ? Number(info.comment_count) : null;
+  const comments = Array.isArray(info.comments) ? info.comments : [];
+  return { reportedCount, comments };
 }
 
 export async function downloadThumbnail(jobDir, thumbnailUrl) {
