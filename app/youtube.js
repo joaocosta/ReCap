@@ -41,15 +41,18 @@ export async function inspectYouTube(input, onSpawn) {
   try { m = JSON.parse(result.stdout); } catch { throw new Error('YouTube returned unreadable metadata.'); }
   if (m._type === 'playlist' || !m.id) throw new Error('Select a single public video, not a playlist.');
   if (m.is_live || m.live_status === 'is_live' || m.live_status === 'is_upcoming') throw new Error('Live and upcoming videos are not supported.');
+  return inspectionFromMetadata(m, canonical);
+}
+
+export function inspectionFromMetadata(m, canonical) {
   const captions = trackChoices(m);
-  if (!captions.length) throw new Error('This video has no supported captions.');
   return {
     inspectId: crypto.randomUUID(), url: canonical.url, videoId: canonical.videoId,
     title: m.title || 'Untitled video', duration: Number(m.duration) || 0,
     durationText: formatTime(m.duration), thumbnailUrl: m.thumbnail || '', uploader: m.uploader || m.channel || '',
     uploadDate: m.upload_date || '', originalLanguage: m.language || '', captions,
     commentCount: m.comment_count != null && Number.isFinite(Number(m.comment_count)) ? Number(m.comment_count) : null,
-    defaultCaptionId: captions[0].id
+    defaultCaptionId: captions[0]?.id || null
   };
 }
 

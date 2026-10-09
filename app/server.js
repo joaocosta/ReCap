@@ -35,8 +35,12 @@ app.post('/api/inspect', protect, async (req,res) => {
 app.post('/api/jobs', protect, async (req,res) => {
   try {
     const record = inspections.get(req.body.inspectId); if (!record || record.expires < Date.now()) throw new Error('Inspection expired. Inspect the URL again.');
-    const choice = record.info.captions.find(c => c.id === req.body.captionId); if (!choice) throw new Error('Choose a valid caption track.');
-    const job = await manager.create(record.info, choice, { regenerate:!!req.body.regenerate, longConfirmed:!!req.body.longConfirmed });
+    const commentsOnly = req.body.mode === 'comments';
+    const choice = record.info.captions.find(c => c.id === req.body.captionId); if (!commentsOnly && !choice) throw new Error('Choose a valid caption track.');
+    const job = await manager.create(record.info, choice, { regenerate:!!req.body.regenerate, longConfirmed:!!req.body.longConfirmed, commentsOnly });
+    if(commentsOnly && !job.comments?.hasReport && !['queued','fetching','preparing','analyzing','synthesizing','saving'].includes(job.comments?.status)) {
+      await manager.enqueueComments(job.id, ['failed','cancelled'].includes(job.comments?.status)?'retry':'analyze');
+    }
     inspections.delete(req.body.inspectId); res.status(201).json(publicJob(job));
   } catch(e) { res.status(e.code === 'DUPLICATE' ? 409 : 400).json({error:e.message, code:e.code, existingJobId:e.existingJobId}); }
 });

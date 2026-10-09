@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 
 export const ROOT = path.resolve(import.meta.dirname, '..');
 export const JOBS_DIR = path.join(ROOT, 'data', 'jobs');
-export const TERMINAL = new Set(['completed', 'failed', 'cancelled']);
+export const TERMINAL = new Set(['completed', 'failed', 'cancelled', 'not_summarized']);
 
 export function canonicalizeYouTube(input) {
   let u;
