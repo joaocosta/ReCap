@@ -48,6 +48,20 @@ export async function loadJobs() {
   return out;
 }
 
+// Launch Pi through Node rather than its /usr/bin/env shebang, which is
+// unavailable on Android when a widget starts us without termux-exec.
+export async function resolvePiEntrypoint(searchPath = process.env.PATH || '') {
+  for (const directory of searchPath.split(path.delimiter)) {
+    try {
+      const entrypoint = await fs.realpath(path.resolve(directory || '.', 'pi'));
+      if ((await fs.stat(entrypoint)).isFile()) return entrypoint;
+    } catch (err) {
+      if (!['ENOENT', 'ENOTDIR'].includes(err.code)) throw err;
+    }
+  }
+  throw new Error('Pi is not installed or is not on the backend PATH. Install Pi and restart the server.');
+}
+
 export function run(command, args, { timeoutMs, cwd = ROOT, input, onSpawn } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'] });

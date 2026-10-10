@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
-import { atomicJson, JOBS_DIR, ROOT, TERMINAL, loadJobs, run, technicalMessage } from './utils.js';
+import { atomicJson, JOBS_DIR, ROOT, TERMINAL, loadJobs, run, resolvePiEntrypoint, technicalMessage } from './utils.js';
 import { inspectYouTube, downloadCaption, downloadThumbnail, downloadComments } from './youtube.js';
 import { selfContainedHtml } from './render.js';
 import {
@@ -280,7 +280,8 @@ export class JobManager extends EventEmitter {
   }
   async runPi(system,prompt,timeoutMs,onSpawn) {
     const args=['--mode','json','--no-tools','--no-session','--no-context-files','--no-extensions','--no-skills','--no-prompt-templates','--system-prompt',system];
-    const pi=await run('pi',args,{timeoutMs,input:prompt,onSpawn});let assistant=null;
+    const entrypoint=await resolvePiEntrypoint();
+    const pi=await run(process.execPath,[entrypoint,...args],{timeoutMs,input:prompt,onSpawn});let assistant=null;
     for(const line of pi.stdout.split('\n')){try{const e=JSON.parse(line);if(e.type==='message_end'&&e.message?.role==='assistant')assistant=e.message;}catch{}}
     const partial=assistant?.content?.filter(x=>x.type==='text').map(x=>x.text).join('')||'';
     if(pi.code!==0||pi.timedOut||!partial.trim()||assistant?.stopReason==='error'||assistant?.stopReason==='aborted')throw Object.assign(new Error(pi.timedOut?'Pi operation timed out.':'Pi could not complete the operation.'),{technical:technicalMessage(pi,'Pi'),exitCode:pi.code,partial});
