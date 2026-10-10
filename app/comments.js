@@ -151,9 +151,43 @@ export function synthesisPrompt(summary, candidates, { hasVideoContext = true } 
 export function parseModelJson(output) {
   const raw = String(output || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   try { return JSON.parse(raw); } catch {}
-  const start = raw.indexOf('{'), end = raw.lastIndexOf('}');
-  if (start >= 0 && end > start) return JSON.parse(raw.slice(start, end + 1));
-  throw new Error('The model returned invalid analysis JSON.');
+  // Extract only one balanced object; never rewrite its contents or choose
+  // between multiple objects. Braces inside JSON strings are not delimiters.
+  const objects = [];
+  let start = -1, depth = 0, quoted = false, escaped = false;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (depth && quoted) {
+      if (escaped) escaped = false;
+      else if (c === '\\') escaped = true;
+      else if (c === '"') quoted = false;
+      continue;
+    }
+    if (depth && c === '"') quoted = true;
+    else if (c === '{') { if (!depth) start = i; depth++; }
+    else if (c === '}' && depth && --depth === 0) objects.push(raw.slice(start, i + 1));
+  }
+  if (objects.length === 1 && depth === 0) return JSON.parse(objects[0]);
+  throw new Error('The model returned invalid or ambiguous analysis JSON.');
+}
+
+export function assertAnalysisSchema(value) {
+  const object = x => x !== null && typeof x === 'object' && !Array.isArray(x);
+  const strings = x => Array.isArray(x) && x.every(v => typeof v === 'string');
+  if (!object(value) || typeof value.overview !== 'string' || !Array.isArray(value.findings) ||
+      !strings(value.keyTakeaways) || !strings(value.caveats)) {
+    throw new Error('Analysis must contain overview, findings, keyTakeaways and caveats with the requested types.');
+  }
+  for (const f of value.findings) {
+    if (!object(f) || typeof f.title !== 'string' || typeof f.summary !== 'string' ||
+        !RELATIONSHIPS.has(f.relationship) || !strings(f.matchingCommentIds) ||
+        !strings(f.evidenceCommentIds) || !strings(f.videoTimestamps) ||
+        (f.verificationNeeded !== undefined && typeof f.verificationNeeded !== 'boolean') ||
+        (f.evidenceTranslations !== undefined && (!object(f.evidenceTranslations) ||
+          !Object.values(f.evidenceTranslations).every(v => typeof v === 'string')))) {
+      throw new Error('A finding does not match the requested analysis schema.');
+    }
+  }
 }
 
 export function validateAnalysis(value, snapshot, duration) {

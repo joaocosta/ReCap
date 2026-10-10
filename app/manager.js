@@ -6,7 +6,7 @@ import { inspectYouTube, downloadCaption, downloadThumbnail, downloadComments } 
 import { selfContainedHtml } from './render.js';
 import {
   prepareCommentSnapshot, makeBatches, videoContext, commentsOnlyContext, analysisPrompt, synthesisPrompt, parseModelJson,
-  validateAnalysis, reportMarkdown, selfContainedCommentHtml, snapshotDigest
+  assertAnalysisSchema, validateAnalysis, reportMarkdown, selfContainedCommentHtml, snapshotDigest
 } from './comments.js';
 
 const COMMENT_ACTIVE = new Set(['queued','fetching','preparing','analyzing','synthesizing','saving']);
@@ -196,8 +196,8 @@ export class JobManager extends EventEmitter {
         } catch {
           await this.commentStage(j,'analyzing',`Analyzing batch ${i+1} of ${batches.length}`,{batch:i+1,batchCount:batches.length});
           const context=hasVideoContext?videoContext(summary,transcript,batches[i]):contextSummary;
-          const response=await this.runPi(system,analysisPrompt(context,batches[i],{candidate:batches.length>1,hasVideoContext}),15*60_000,child);
-          candidate=validateAnalysis(parseModelJson(response.text),snapshot,j.duration);models.add(response.model);usages.push(response.usage);
+          const response=await this.runCommentAnalysis(j,work,system,analysisPrompt(context,batches[i],{candidate:batches.length>1,hasVideoContext}),snapshot,child,usages);
+          candidate=response.analysis;models.add(response.model);
           await fs.writeFile(checkpoint,JSON.stringify({candidate,model:response.model,usage:response.usage},null,2));
         }
         candidates.push(candidate);
@@ -210,8 +210,8 @@ export class JobManager extends EventEmitter {
         try {
           const saved=JSON.parse(await fs.readFile(finalFile,'utf8'));analysis=saved.analysis;models.add(saved.model);usages.push(saved.usage);
         } catch {
-          const response=await this.runPi(system,synthesisPrompt(contextSummary,candidates,{hasVideoContext}),15*60_000,child);
-          analysis=validateAnalysis(parseModelJson(response.text),snapshot,j.duration);models.add(response.model);usages.push(response.usage);
+          const response=await this.runCommentAnalysis(j,work,system,synthesisPrompt(contextSummary,candidates,{hasVideoContext}),snapshot,child,usages);
+          analysis=response.analysis;models.add(response.model);
           await fs.writeFile(finalFile,JSON.stringify({analysis,model:response.model,usage:response.usage},null,2));
         }
       }
@@ -243,6 +243,39 @@ export class JobManager extends EventEmitter {
       if(j.comments?.status==='cancelled')return;
       await this.commentStage(j,'failed','Comment analysis failed',{error:friendly(err),technical:{message:err.technical||err.message,exitCode:err.exitCode,partialOutput:err.partial||''}});
       this.log(j,`comments-failed ${Date.now()-started}ms ${String(err.message).slice(0,200)}`);
+    }
+  }
+  async runCommentAnalysis(j,work,system,prompt,snapshot,onSpawn,usages) {
+    const diagnostic=path.join(work,'failed-model-response.json');
+    let feedback='';
+    const attemptUsages=[];
+    for(let attempt=1;attempt<=3;attempt++) {
+      if(j.comments.status==='cancelled')throw new Error('Comment analysis cancelled.');
+      const response=await this.runPi(system,prompt+feedback,15*60_000,onSpawn);
+      usages.push(response.usage);attemptUsages.push(response.usage);
+      if(j.comments.status==='cancelled')throw new Error('Comment analysis cancelled.');
+      let analysis;
+      try {
+        const value=parseModelJson(response.text);
+        assertAnalysisSchema(value);
+        const allowed=new Set(snapshot.comments.filter(c=>!c.excludedReason).map(c=>c.id));
+        for(const finding of value.findings) {
+          if(!finding.matchingCommentIds.length || !finding.evidenceCommentIds.length ||
+             [...finding.matchingCommentIds,...finding.evidenceCommentIds].some(id=>!allowed.has(id))) {
+            throw new Error('Each finding must reference existing, eligible supporting and evidence comment IDs.');
+          }
+        }
+        analysis=validateAnalysis(value,snapshot,j.duration);
+      } catch(err) {
+        const detail=String(err.message).slice(0,400);
+        await fs.writeFile(diagnostic,JSON.stringify({attempt,model:response.model,error:detail,response:response.text},null,2),{mode:0o600});
+        if(attempt===3)throw new Error('The model could not produce a valid structured analysis after several attempts. Your completed batches are saved. You can retry.');
+        await this.commentStage(j,j.comments.status,`Retrying structured analysis (attempt ${attempt+1} of 3)`);
+        feedback=`\n\nYour previous response failed validation: ${detail}\nReturn a complete replacement JSON object in the requested schema, with valid JSON syntax and only supplied comment IDs. Do not include commentary or Markdown fences.`;
+        continue;
+      }
+      await fs.rm(diagnostic,{force:true});
+      return {...response,analysis,usage:combineUsage(attemptUsages)};
     }
   }
   async runPi(system,prompt,timeoutMs,onSpawn) {
