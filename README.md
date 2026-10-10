@@ -13,7 +13,9 @@ Open <http://127.0.0.1:8765>. The server exits after 30 idle minutes and binds o
 
 ## Termux:Widget
 
-Run `npm run setup-widget` to install `~/.shortcuts/YouTube Summarizer`. Refresh Termux:Widget, then tap the shortcut. It reuses a healthy server or starts one before opening the browser.
+Run `npm run setup-widget` to install `~/.shortcuts/tasks/YouTube Summarizer` as a background task (and remove the old terminal shortcut). Refresh Termux:Widget, or remove and re-add the widget, then tap the task. It reuses a healthy server or starts a detached Node process before opening the browser; no terminal or tmux session is needed. If startup fails, it does not open the browser; check `data/logs/server-YYYY-MM-DD.log` for details.
+
+Android can still stop Termux in the background. If jobs are interrupted after switching apps or locking the screen, set Termux's battery usage to unrestricted in Android settings (the wording varies by phone).
 
 ## Summarizing comments independently
 
