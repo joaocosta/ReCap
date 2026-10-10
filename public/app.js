@@ -16,7 +16,7 @@ function jobCard(j){const active=videoActive(j);return `<article class="job"><di
 async function act(b,url){busy(b,true);try{await api(url,{method:'POST',body:{}});await loadHistory();if(currentJob)await openJob(currentJob.id,currentTab)}catch(e){alert(e.message)}finally{busy(b,false)}}
 async function retry(b,id){let longConfirmed=false;const j=await api(`/api/jobs/${id}`);if(j.duration>3600){longConfirmed=confirm('This video is longer than one hour. Retry the complete pipeline?');if(!longConfirmed)return}busy(b,true);try{const n=await api(`/api/jobs/${id}/retry`,{method:'POST',body:{longConfirmed}});await loadHistory();openJob(n.id,'summary')}catch(e){alert(e.message)}finally{busy(b,false)}}
 async function removeJob(b,id){if(!confirm('Permanently delete this job and all transcript and comment artifacts?'))return;busy(b,true);try{await api(`/api/jobs/${id}`,{method:'DELETE'});viewer.hidden=true;if(currentJob?.id===id)currentJob=null;await loadHistory()}catch(e){alert(e.message)}}
-async function openJob(id,tab=null){source?.close();const j=await api(`/api/jobs/${id}`);currentTab=tab||(j.status==='not_summarized'?'comments':currentTab);currentJob=j;viewer.hidden=false;viewer.scrollIntoView({behavior:'smooth'});await renderJob(j);if(anythingActive(j)){source=new EventSource(`/api/jobs/${id}/events`);source.onmessage=async e=>{const next=JSON.parse(e.data);currentJob=next;await renderJob(next);loadHistory();if(!anythingActive(next))source.close()}}}
+async function openJob(id,tab=null,scroll=true){source?.close();const j=await api(`/api/jobs/${id}`);currentTab=tab||(j.status==='not_summarized'?'comments':currentTab);currentJob=j;viewer.hidden=false;if(scroll)viewer.scrollIntoView({behavior:'smooth'});await renderJob(j);if(anythingActive(j)){source=new EventSource(`/api/jobs/${id}/events`);source.onmessage=async e=>{const next=JSON.parse(e.data);currentJob=next;await renderJob(next);loadHistory();if(!anythingActive(next))source.close()}}}
 function shell(j,body){return `<div class="section-head"><h2>${esc(j.title)}</h2><button class="secondary" id="close-view">Close</button></div><div class="tabs" role="tablist"><button class="tab ${currentTab==='summary'?'active':''}" data-tab="summary" role="tab">Video summary</button><button class="tab ${currentTab==='comments'?'active':''}" data-tab="comments" role="tab">Comments${commentActive(j)?' · '+esc(j.comments.status):''}</button></div><div class="tab-panel">${body}</div>`}
 function bindShell(j){$('#close-view').onclick=()=>{source?.close();viewer.hidden=true};viewer.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{currentTab=b.dataset.tab;renderJob(j)})}
 async function renderJob(j){if(currentTab==='comments'){await renderComments(j);return}if(j.status==='not_summarized'){viewer.innerHTML=shell(j,'<p>Video not summarized. Inspect this video’s URL to select a caption track and summarize it.</p>');bindShell(j);return}if(j.status!=='completed'){viewer.innerHTML=shell(j,`<p class="status ${esc(j.status)}">${esc(j.status)} — ${esc(j.progress)}</p>${j.error?`<p>${esc(j.error)}</p>`:''}${j.technical?`<details><summary>Technical details</summary><pre>${esc(j.technical.message||'')}${j.technical.partialOutput?'\n\nPartial model output (incomplete):\n'+esc(j.technical.partialOutput):''}</pre></details>`:''}${videoActive(j)?`<button class="danger" id="cancel-view">Cancel</button>`:''}`);bindShell(j);const c=$('#cancel-view');if(c)c.onclick=()=>act(c,`/api/jobs/${j.id}/cancel`);return}
@@ -29,4 +29,27 @@ let controls='';if(commentActive(j))controls=progressPanel(j);else if(!c.hasRepo
 viewer.innerHTML=shell(j,controls+report);bindShell(j);const analyze=$('#analyze-comments'),refresh=$('#refresh-comments'),retryButton=$('#retry-comments'),cancel=$('#cancel-comments');if(analyze)analyze.onclick=()=>commentAction(analyze,j.id,'analyze');if(refresh)refresh.onclick=()=>commentAction(refresh,j.id,'refresh');if(retryButton)retryButton.onclick=()=>commentAction(retryButton,j.id,'retry');if(cancel)cancel.onclick=()=>commentAction(cancel,j.id,'cancel')}
 async function commentAction(button,id,action){busy(button,true,action==='cancel'?'Cancelling…':'Queueing…');try{await api(`/api/jobs/${id}/comments/${action}`,{method:'POST',body:{}});await loadHistory();await openJob(id,'comments')}catch(e){alert(e.message)}finally{busy(button,false)}}
 $('#refresh').onclick=loadHistory;
-(async()=>{csrf=(await fetch('/api/config').then(r=>r.json())).csrf;await loadHistory()})().catch(e=>notice.textContent=e.message);
+let backendState='checking',healthCheck=null,healthTimer=null;
+function setBackendState(state){backendState=state;const badge=$('#backend-status');badge.dataset.state=state;badge.textContent=state==='online'?'Backend online':state==='offline'?'Backend unreachable':'Checking backend…';$('#backend-retry').hidden=state!=='offline';$('#backend-help').hidden=state!=='offline'}
+async function healthJson(url){const response=await fetch(url,{cache:'no-store',signal:AbortSignal.timeout(3000)});if(!response.ok)throw new Error('Backend unreachable');return response.json()}
+function checkBackend(){
+  if(healthCheck)return healthCheck;
+  clearTimeout(healthTimer);
+  healthCheck=(async()=>{
+    const reconnect=backendState!=='online';
+    try{
+      const health=await healthJson('/health');if(health.ok!==true)throw new Error('Invalid health response');
+      if(reconnect){
+        const config=await healthJson('/api/config');if(typeof config.csrf!=='string'||!config.csrf)throw new Error('Invalid backend configuration');
+        if(csrf&&csrf!==config.csrf){currentInspection=null;inspection.hidden=true}
+        csrf=config.csrf;
+      }
+      setBackendState('online');
+    }catch(e){setBackendState('offline');return}
+    if(reconnect){try{await loadHistory();if(currentJob&&!viewer.hidden)await openJob(currentJob.id,currentTab,false)}catch(e){notice.textContent=e.message}}
+  })().finally(()=>{healthCheck=null;healthTimer=setTimeout(()=>{if(!document.hidden)checkBackend()},10000)});
+  return healthCheck;
+}
+$('#backend-retry').onclick=()=>checkBackend();
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkBackend();else clearTimeout(healthTimer)});
+checkBackend();
